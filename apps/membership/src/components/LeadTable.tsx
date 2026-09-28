@@ -278,12 +278,14 @@ export function LeadsView({
           <div role="row" className="grid header">
             <span role="columnheader">Nome</span>
             <span role="columnheader">Etapa</span>
+            <span role="columnheader">Na etapa</span>
             <span role="columnheader">Contato</span>
             <span role="columnheader">Fonte / campanha</span>
             <span role="columnheader">Plano</span>
             <span role="columnheader">Fit</span>
             <span role="columnheader">Último contato</span>
             <span role="columnheader">Próximo passo</span>
+            <span role="columnheader">Análise IA</span>
             <span role="columnheader"><span className="sr-only">Histórico</span></span>
           </div>
 
@@ -297,14 +299,13 @@ export function LeadsView({
               <div role="row" className={`grid row${row.missingStep ? ' flagged' : ''}`} key={lead.id}>
                 <div role="cell" className="person">
                   <span className="initials" aria-hidden="true">{initials(lead.name)}</span>
-                  <div className="cell-stack" style={{ gap: 5, alignItems: 'flex-start' }}>
-                    <span className="person-name">{lead.name}</span>
-                    {row.analysis && <AnalysisButton lead={lead} onOpen={onOpenAnalysis} />}
-                  </div>
+                  <span className="person-name">{lead.name}</span>
                 </div>
-                <div role="cell" className="cell-stack" style={{ gap: 5, alignItems: 'flex-start' }}>
+                <div role="cell">
                   <StageSelect lead={lead} stages={stages} onMove={requestMove} />
-                  <span className={`days${!closed && days >= 5 ? ' stale' : ''}`} title="Tempo nesta etapa">há {daysLabel(days)}</span>
+                </div>
+                <div role="cell">
+                  <span className={`days${!closed && days >= 5 ? ' stale' : ''}`}>{daysLabel(days)}</span>
                 </div>
                 <div role="cell" className="cell-stack">
                   <span className="mono" style={{ fontSize: 12 }}>{phone(lead.phone) || '—'}</span>
@@ -326,6 +327,15 @@ export function LeadsView({
                 </div>
                 <div role="cell">
                   <NextStep row={row} {...shared} />
+                </div>
+                <div role="cell">
+                  {row.analysis ? (
+                    <button type="button" className="analysis-icon" title="Abrir Análise IA" aria-label={`Análise IA de ${first}`} onClick={() => onOpenAnalysis(lead)}>
+                      <AssistantAvatar size={30} />
+                    </button>
+                  ) : (
+                    <span className="hint">—</span>
+                  )}
                 </div>
                 <div role="cell">
                   <button type="button" className="icon-btn sm" aria-label={`Histórico de ${first}`} title="Histórico" onClick={() => onOpenHistory(lead)}>
