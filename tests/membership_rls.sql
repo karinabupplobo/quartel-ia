@@ -227,6 +227,24 @@ do $$ begin
 end $$;
 rollback;
 
+-- Assistant comments: team only, never across tenants
+insert into public.m_ai_insights (tenant_id, scope, body) values
+  ('11000000-0000-4000-8000-000000000001', 'pipeline', 'Resumo do dia');
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-000000000002"}', true);
+do $$ begin
+  assert (select count(*) from public.m_ai_insights) = 1, 'attendant sees only own club insights';
+end $$;
+rollback;
+begin;
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"c0000000-0000-4000-8000-000000000011"}', true);
+do $$ begin
+  assert (select count(*) from public.m_ai_insights) = 0, 'members never see assistant comments';
+end $$;
+rollback;
+
 -- Anonymous requests see nothing
 begin;
 set local role anon;

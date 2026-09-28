@@ -99,3 +99,5 @@ roles and helpers; the two demos never see each other's data.
 
 Screen map: Claude Project doc `membership/mapa-de-telas.md`.
 Tests: `tests/membership_rls.sql` (run by `scripts/test-local.sh`).
+
+Membership app (lead funnel): [`apps/membership`](apps/membership/README.md).
