@@ -81,3 +81,21 @@ anonymous access.
 
 Supabase (Postgres, Auth, RLS, Edge Functions) · WhatsApp Cloud API / provider TBD ·
 LLM agent with tool calling · pgvector for the school knowledge base.
+
+## Membership demo (`m_*`)
+
+Generic subscription / membership business (base example: a club), Brazil (BRL; Pix,
+boleto and card via Asaas). Lives in the same Supabase project with its own tables,
+roles and helpers; the two demos never see each other's data.
+
+- **Roles:** `admin`, `staff`, `attendant` (team) and `member` (portal).
+- **Modules** (`m_tenant_modules`): capture, members, billing, health, portal, dashboard,
+  tasks, agent. Plans and benefits are an ungated catalog.
+- **Portal rules:** holders see their subscription, dependents and invoices; dependents see
+  the subscription but not invoices; members never see each other, leads, tasks or CPF.
+- **CPF** lives in `m_people_private`, readable only by admin and staff.
+- **Plan capacity** (holder + dependents ≤ `max_people`) is enforced by a trigger.
+- Connector and channel secrets never go in tables — use Supabase Vault.
+
+Screen map: Claude Project doc `membership/mapa-de-telas.md`.
+Tests: `tests/membership_rls.sql` (run by `scripts/test-local.sh`).
