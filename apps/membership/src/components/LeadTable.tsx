@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, DragEvent, FormEvent } from 'react'
+import type { CSSProperties, FormEvent } from 'react'
 import type { Fit, Insight, Lead, Stage, Task } from '../lib/data'
 import { CONTACT_LABEL } from '../lib/data'
 import { agoLabel, daysLabel, daysSince, dueLabel, firstName, initials, phone, planPrice } from '../lib/format'
@@ -20,8 +20,6 @@ export interface LeadRow {
 
 /** Days without contact after which an open lead is flagged. */
 const CONTACT_STALE_DAYS = 4
-
-type ViewMode = 'sheet' | 'kanban'
 
 interface Filters {
   text: string
@@ -107,7 +105,6 @@ export function LeadsView({
   onAddTask: (lead: Lead, input: { title: string; dueDate: string | null }) => Promise<void>
   onMove: (lead: Lead, stage: Stage, lostReason?: string | null) => Promise<void>
 }) {
-  const [mode, setMode] = useState<ViewMode>('sheet')
   const [filters, setFilters] = useState<Filters>(EMPTY)
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [taskFor, setTaskFor] = useState<string | null>(null)
@@ -134,10 +131,9 @@ export function LeadsView({
 
   const stageName = (id: string) => stages.find((s) => s.id === id)?.name ?? ''
   const filtered = rows.filter((r) => matches(r, filters))
-  // The sheet follows the funnel selection; the kanban always shows every stage.
   const sheetRows = selected === 'all' ? filtered : filtered.filter((r) => r.lead.stageId === selected)
   const selectedName = selected === 'all' ? 'Todos os leads' : stageName(selected)
-  const count = mode === 'sheet' ? sheetRows.length : filtered.length
+  const count = sheetRows.length
 
   const active = (Object.keys(EMPTY) as (keyof Filters)[]).filter((k) => filters[k])
   const chipLabel = (k: keyof Filters): string => {
@@ -171,7 +167,7 @@ export function LeadsView({
   }
 
   function exportCsv() {
-    const list = mode === 'sheet' ? sheetRows : filtered
+    const list = sheetRows
     const header = ['Nome', 'Telefone', 'E-mail', 'Etapa', 'Fonte', 'Campanha', 'Plano', 'Fit', 'Dias na etapa', 'Último contato', 'Próximo passo']
     const lines = list.map((r) => [
       r.lead.name,
@@ -212,7 +208,7 @@ export function LeadsView({
     <section className="card table-card" aria-label={`Leads: ${selectedName}`}>
       <div className="table-head">
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          <h2>{mode === 'sheet' ? selectedName : 'Todas as etapas'}</h2>
+          <h2>{selectedName}</h2>
           <span className="hint">{count === 1 ? '1 lead' : `${count} leads`}</span>
         </div>
         <div className="table-tools">
@@ -227,11 +223,6 @@ export function LeadsView({
             Filtros
             {active.length > 0 && <span className="count-pill">{active.length}</span>}
           </button>
-          <div className="segmented" role="group" aria-label="Formato">
-            <span className="segmented-label">Formato</span>
-            <button type="button" aria-pressed={mode === 'sheet'} onClick={() => setMode('sheet')}>Planilha</button>
-            <button type="button" aria-pressed={mode === 'kanban'} onClick={() => setMode('kanban')}>Kanban</button>
-          </div>
           <button type="button" className="icon-btn" aria-label="Exportar (CSV)" title="Exportar" onClick={exportCsv}>
             <IconDownload size={18} />
           </button>
@@ -244,7 +235,7 @@ export function LeadsView({
             Nome, telefone ou e-mail
             <input value={filters.text} onChange={(e) => set('text')(e.target.value)} placeholder="Digite para filtrar" />
           </label>
-          {mode === 'sheet' && selected === 'all' && (
+          {selected === 'all' && (
             <FilterSelect label="Etapa" value={filters.stage} onChange={set('stage')} options={stages.map((s) => [s.id, s.name])} />
           )}
           <FilterSelect label="Fonte" value={filters.source} onChange={set('source')} options={options.source.map((v) => [v, v])} />
@@ -273,8 +264,7 @@ export function LeadsView({
 
       {moveError && <p className="form-error" role="alert" style={{ margin: '0 20px 12px' }}>{moveError}</p>}
 
-      {mode === 'sheet' ? (
-        <div role="table" aria-label={selectedName}>
+      <div role="table" aria-label={selectedName}>
           <div role="row" className="grid header">
             <span role="columnheader">Nome</span>
             <span role="columnheader">Etapa</span>
@@ -366,9 +356,6 @@ export function LeadsView({
           )}
           {canAdd && adding && <AddLeadForm onCancel={() => setAdding(false)} onSave={async (input) => { await onAddLead(input); setAdding(false) }} />}
         </div>
-      ) : (
-        <Kanban rows={filtered} selected={selected} {...shared} />
-      )}
 
       {lostFor && (
         <LostDialog
@@ -384,7 +371,7 @@ export function LeadsView({
   )
 }
 
-// ---- Pieces shared by the sheet and the kanban -------------------------------------
+// ---- Row pieces -------------------------------------
 
 interface SharedProps {
   stages: Stage[]
@@ -394,15 +381,6 @@ interface SharedProps {
   onOpenAnalysis: (lead: Lead) => void
   onAddTask: (lead: Lead, input: { title: string; dueDate: string | null }) => Promise<void>
   onMove: (lead: Lead, stageId: string) => void
-}
-
-function AnalysisButton({ lead, onOpen }: { lead: Lead; onOpen: (lead: Lead) => void }) {
-  return (
-    <button type="button" className="analysis-btn" onClick={() => onOpen(lead)} aria-label={`Análise IA de ${firstName(lead.name)}`}>
-      <AssistantAvatar size={20} />
-      Análise IA
-    </button>
-  )
 }
 
 function LastContact({ row }: { row: LeadRow }) {
@@ -465,131 +443,6 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
         ))}
       </select>
     </label>
-  )
-}
-
-// ---- Kanban -------------------------------------------------------------------------
-
-function Kanban({ rows, selected, ...shared }: { rows: LeadRow[]; selected: string | 'all' } & SharedProps) {
-  const { stages, taskFor, setTaskFor, onOpenHistory, onOpenAnalysis, onAddTask, onMove } = shared
-  const [dragging, setDragging] = useState<string | null>(null)
-  const [over, setOver] = useState<string | null>(null)
-  const colRefs = useRef<Record<string, HTMLDivElement | null>>({})
-
-  useEffect(() => {
-    if (selected !== 'all') colRefs.current[selected]?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' })
-  }, [selected])
-
-  function drop(e: DragEvent, stageId: string) {
-    e.preventDefault()
-    const id = e.dataTransfer.getData('text/plain')
-    setOver(null)
-    setDragging(null)
-    const row = rows.find((r) => r.lead.id === id)
-    if (row) onMove(row.lead, stageId)
-  }
-
-  return (
-    <div className="kanban" role="list" aria-label="Kanban por etapa">
-      {stages.map((stage) => {
-        const cards = rows.filter((r) => r.lead.stageId === stage.id)
-        return (
-          <div
-            key={stage.id}
-            ref={(el) => {
-              colRefs.current[stage.id] = el
-            }}
-            role="listitem"
-            className={`kcol ${stage.kind}${selected === stage.id ? ' focus' : ''}${over === stage.id ? ' over' : ''}`}
-            onDragOver={(e) => {
-              if (!dragging) return
-              e.preventDefault()
-              setOver(stage.id)
-            }}
-            onDragLeave={() => setOver((o) => (o === stage.id ? null : o))}
-            onDrop={(e) => drop(e, stage.id)}
-          >
-            <div className="kcol-head">
-              <span>{stage.name}</span>
-              <span className="count-pill neutral">{cards.length}</span>
-            </div>
-            {cards.length === 0 && <div className="kempty">Arraste um lead para cá</div>}
-            {cards.map((row) => {
-              const { lead, closed } = row
-              const days = daysSince(lead.stageChangedAt)
-              const first = firstName(lead.name)
-              return (
-                <article
-                  key={lead.id}
-                  className={`kcard${dragging === lead.id ? ' dragging' : ''}${row.missingStep ? ' flagged' : ''}`}
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData('text/plain', lead.id)
-                    e.dataTransfer.effectAllowed = 'move'
-                    setDragging(lead.id)
-                  }}
-                  onDragEnd={() => {
-                    setDragging(null)
-                    setOver(null)
-                  }}
-                >
-                  <div className="kcard-top">
-                    <span className="initials" aria-hidden="true">{initials(lead.name)}</span>
-                    <div className="cell-stack" style={{ flexGrow: 1 }}>
-                      <span className="person-name" style={{ fontSize: 13 }}>{lead.name}</span>
-                      <span className="sub">{lead.source ?? '—'}</span>
-                    </div>
-                    <button type="button" className="icon-btn sm" style={{ width: 30, height: 30 }} aria-label={`Histórico de ${first}`} title="Histórico" onClick={() => onOpenHistory(lead)}>
-                      <IconHistory size={15} />
-                    </button>
-                  </div>
-                  <div className="kcard-meta">
-                    {lead.fit && <span className={`tag ${lead.fit}`}>{FIT_LABEL[lead.fit]}</span>}
-                    <span className="sub">{lead.planName ?? ''}</span>
-                    <span className={`days${!closed && days >= 5 ? ' stale' : ''}`} style={{ marginLeft: 'auto' }}>{daysLabel(days)}</span>
-                  </div>
-                  {!closed && (
-                    <div className="kcard-contact">
-                      <span className="hint" style={{ fontSize: 11 }}>Último contato</span>
-                      <LastContactInline row={row} />
-                    </div>
-                  )}
-                  {!closed || row.task ? (
-                    <div className={`kcard-task${row.missingStep ? ' missing' : ''}`}>
-                      <NextStep row={row} taskFor={taskFor} setTaskFor={setTaskFor} />
-                    </div>
-                  ) : null}
-                  {row.analysis && <AnalysisButton lead={lead} onOpen={onOpenAnalysis} />}
-                  <StageSelect lead={lead} stages={stages} onMove={onMove} compact />
-                  {taskFor === lead.id && (
-                    <TaskPopover
-                      name={first}
-                      style={{ top: 48, left: 8, width: 300 }}
-                      onCancel={() => setTaskFor(null)}
-                      onSave={async (input) => {
-                        await onAddTask(lead, input)
-                        setTaskFor(null)
-                      }}
-                    />
-                  )}
-                </article>
-              )
-            })}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function LastContactInline({ row }: { row: LeadRow }) {
-  const c = row.lead.lastContact
-  if (!c) return <span className={row.closed ? 'hint' : 'due late'} style={{ fontSize: 12 }}>{row.closed ? '—' : 'Nunca'}</span>
-  const stale = !row.closed && daysSince(c.at) >= CONTACT_STALE_DAYS
-  return (
-    <span className={stale ? 'due late' : 'strong'} style={{ fontSize: 12 }}>
-      {agoLabel(c.at)} · {CONTACT_LABEL[c.kind] ?? c.kind}
-    </span>
   )
 }
 
