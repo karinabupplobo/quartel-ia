@@ -3,7 +3,7 @@
 React + Vite single-page app for the membership demo (`m_*` tables in the
 quartel-ia Supabase project). First screen: the lead funnel.
 
-- **Data:** Supabase with the publishable key in `.env` (public by design;
+- **Data:** Supabase with the publishable key in `src/lib/supabase.ts` (public by design;
   every table is protected by Row Level Security). Users only see data of the
   club they belong to, and only team roles (admin, staff, attendant) can open
   the funnel.

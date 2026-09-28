@@ -23,6 +23,9 @@ export default function App() {
     return () => data.subscription.unsubscribe()
   }, [])
 
+  // Changes when the auth state is first known, on sign-in and on sign-out.
+  const sessionKey = session === undefined ? 'pending' : session ? session.user.id : 'signed-out'
+
   useEffect(() => {
     if (session === undefined) return
     if (!session) {
@@ -33,7 +36,7 @@ export default function App() {
     loadWorkspace()
       .then((w) => setState(w ? { status: 'ready', workspace: w } : { status: 'no-access' }))
       .catch((e: Error) => setState({ status: 'error', message: e.message }))
-  }, [session?.user.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const signOut = () => void supabase.auth.signOut()
 
