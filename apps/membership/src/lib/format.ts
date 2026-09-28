@@ -66,3 +66,11 @@ export function relativeTime(iso: string, now = new Date()): string {
   if (days === 1) return `Ontem ${time}`
   return `${days} dias atrás`
 }
+
+/** "hoje", "ontem", "há 3 dias". */
+export function agoLabel(iso: string, now = new Date()): string {
+  const d = daysSince(iso, now)
+  if (d === 0) return 'hoje'
+  if (d === 1) return 'ontem'
+  return `há ${d} dias`
+}

@@ -1,25 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, DragEvent, FormEvent } from 'react'
 import type { Fit, Insight, Lead, Stage, Task } from '../lib/data'
-import { daysLabel, daysSince, dueLabel, firstName, initials, phone, planPrice } from '../lib/format'
-import { IconClose, IconDownload, IconFilter, IconHistory, IconPlus } from './icons'
+import { CONTACT_LABEL } from '../lib/data'
+import { agoLabel, daysLabel, daysSince, dueLabel, firstName, initials, phone, planPrice } from '../lib/format'
+import { AssistantAvatar, IconClose, IconDownload, IconFilter, IconHistory, IconPlus } from './icons'
 
 const FIT_LABEL: Record<Fit, string> = { high: 'Alto', medium: 'Médio', low: 'Baixo' }
-
-/** Something the assistant flags about a lead (shown as the purple counter). */
-export interface Note {
-  kind: 'ai' | 'late' | 'today' | 'stale'
-  text: string
-}
 
 export interface LeadRow {
   lead: Lead
   stageName: string
   closed: boolean
   task: Task | undefined
-  insight: Insight | undefined
-  notes: Note[]
+  /** The assistant's analysis (Proposta and Negociação). */
+  analysis: Insight | undefined
+  /** Open lead with nothing scheduled. */
+  missingStep: boolean
 }
+
+/** Days without contact after which an open lead is flagged. */
+const CONTACT_STALE_DAYS = 4
 
 type ViewMode = 'sheet' | 'kanban'
 
@@ -31,20 +31,20 @@ interface Filters {
   plan: string
   fit: string
   days: string
+  contact: string
   task: string
-  notes: string
 }
 
-const EMPTY: Filters = { text: '', stage: '', source: '', campaign: '', plan: '', fit: '', days: '', task: '', notes: '' }
+const EMPTY: Filters = { text: '', stage: '', source: '', campaign: '', plan: '', fit: '', days: '', contact: '', task: '' }
 
 const DAYS_OPTIONS: Record<string, string> = { '0-2': 'Até 2 dias', '3-4': '3 a 4 dias', '5+': '5 dias ou mais' }
+const CONTACT_OPTIONS: Record<string, string> = { '0-2': 'Até 2 dias', '3-4': '3 a 4 dias', '5+': '5 dias ou mais', never: 'Nunca' }
 const TASK_OPTIONS: Record<string, string> = {
-  late: 'Atrasada',
+  late: 'Atrasado',
   today: 'Para hoje',
-  any: 'Com tarefa',
-  none: 'Sem tarefa',
+  any: 'Agendado',
+  none: 'Sem próximo passo',
 }
-const NOTE_OPTIONS: Record<string, string> = { yes: 'Com notificações', no: 'Sem notificações' }
 
 function matches(r: LeadRow, f: Filters): boolean {
   const l = r.lead
@@ -64,15 +64,21 @@ function matches(r: LeadRow, f: Filters): boolean {
     if (f.days === '3-4' && (d < 3 || d > 4)) return false
     if (f.days === '5+' && d < 5) return false
   }
+  if (f.contact) {
+    const d = l.lastContact ? daysSince(l.lastContact.at) : null
+    if (f.contact === 'never' && d !== null) return false
+    if (f.contact !== 'never' && d === null) return false
+    if (d !== null && f.contact === '0-2' && d > 2) return false
+    if (d !== null && f.contact === '3-4' && (d < 3 || d > 4)) return false
+    if (d !== null && f.contact === '5+' && d < 5) return false
+  }
   if (f.task) {
     const tone = r.task ? dueLabel(r.task.dueDate).tone : null
     if (f.task === 'late' && tone !== 'late') return false
     if (f.task === 'today' && tone !== 'today') return false
     if (f.task === 'any' && !r.task) return false
-    if (f.task === 'none' && r.task) return false
+    if (f.task === 'none' && !r.missingStep) return false
   }
-  if (f.notes === 'yes' && r.notes.length === 0) return false
-  if (f.notes === 'no' && r.notes.length > 0) return false
   return true
 }
 
@@ -86,6 +92,7 @@ export function LeadsView({
   selected,
   canAdd,
   onOpenHistory,
+  onOpenAnalysis,
   onAddLead,
   onAddTask,
   onMove,
@@ -95,6 +102,7 @@ export function LeadsView({
   selected: string | 'all'
   canAdd: boolean
   onOpenHistory: (lead: Lead) => void
+  onOpenAnalysis: (lead: Lead) => void
   onAddLead: (input: { name: string; phone: string | null; email: string | null }) => Promise<void>
   onAddTask: (lead: Lead, input: { title: string; dueDate: string | null }) => Promise<void>
   onMove: (lead: Lead, stage: Stage, lostReason?: string | null) => Promise<void>
@@ -102,7 +110,6 @@ export function LeadsView({
   const [mode, setMode] = useState<ViewMode>('sheet')
   const [filters, setFilters] = useState<Filters>(EMPTY)
   const [filtersOpen, setFiltersOpen] = useState(false)
-  const [openNotes, setOpenNotes] = useState<string | null>(null)
   const [taskFor, setTaskFor] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [lostFor, setLostFor] = useState<{ lead: Lead; stage: Stage } | null>(null)
@@ -110,10 +117,7 @@ export function LeadsView({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        setOpenNotes(null)
-        setTaskFor(null)
-      }
+      if (e.key === 'Escape') setTaskFor(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -146,8 +150,8 @@ export function LeadsView({
       case 'plan': return `Plano: ${v}`
       case 'fit': return `Fit: ${FIT_LABEL[v as Fit]}`
       case 'days': return `Na etapa: ${DAYS_OPTIONS[v]}`
-      case 'task': return `Tarefa: ${TASK_OPTIONS[v]}`
-      case 'notes': return NOTE_OPTIONS[v]
+      case 'contact': return `Último contato: ${CONTACT_OPTIONS[v]}`
+      case 'task': return `Próximo passo: ${TASK_OPTIONS[v]}`
     }
   }
 
@@ -168,7 +172,7 @@ export function LeadsView({
 
   function exportCsv() {
     const list = mode === 'sheet' ? sheetRows : filtered
-    const header = ['Nome', 'Telefone', 'E-mail', 'Etapa', 'Fonte', 'Campanha', 'Plano', 'Fit', 'Dias na etapa', 'Próxima tarefa']
+    const header = ['Nome', 'Telefone', 'E-mail', 'Etapa', 'Fonte', 'Campanha', 'Plano', 'Fit', 'Dias na etapa', 'Último contato', 'Próximo passo']
     const lines = list.map((r) => [
       r.lead.name,
       phone(r.lead.phone),
@@ -179,7 +183,8 @@ export function LeadsView({
       r.lead.planName ?? '',
       r.lead.fit ? FIT_LABEL[r.lead.fit] : '',
       String(daysSince(r.lead.stageChangedAt)),
-      r.task?.title ?? '',
+      r.lead.lastContact ? `${agoLabel(r.lead.lastContact.at)} (${CONTACT_LABEL[r.lead.lastContact.kind] ?? ''})` : 'Nunca',
+      r.task?.title ?? (r.missingStep ? 'Sem próximo passo' : ''),
     ])
     const csv = [header, ...lines].map((cols) => cols.map((c) => `"${c.replace(/"/g, '""')}"`).join(';')).join('\n')
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' })
@@ -193,14 +198,13 @@ export function LeadsView({
 
   const set = (k: keyof Filters) => (v: string) => setFilters((f) => ({ ...f, [k]: v }))
 
-  const shared = {
+  const shared: SharedProps = {
     stages,
-    openNotes,
-    setOpenNotes: (id: string | null) => {
-      setTaskFor(null)
-      setOpenNotes(id)
-    },
+    taskFor,
+    setTaskFor,
     onOpenHistory,
+    onOpenAnalysis,
+    onAddTask,
     onMove: requestMove,
   }
 
@@ -248,8 +252,8 @@ export function LeadsView({
           <FilterSelect label="Plano" value={filters.plan} onChange={set('plan')} options={options.plan.map((v) => [v, v])} />
           <FilterSelect label="Fit" value={filters.fit} onChange={set('fit')} options={Object.entries(FIT_LABEL)} />
           <FilterSelect label="Na etapa" value={filters.days} onChange={set('days')} options={Object.entries(DAYS_OPTIONS)} />
-          <FilterSelect label="Próxima tarefa" value={filters.task} onChange={set('task')} options={Object.entries(TASK_OPTIONS)} />
-          <FilterSelect label="Notificações" value={filters.notes} onChange={set('notes')} options={Object.entries(NOTE_OPTIONS)} />
+          <FilterSelect label="Último contato" value={filters.contact} onChange={set('contact')} options={Object.entries(CONTACT_OPTIONS)} />
+          <FilterSelect label="Próximo passo" value={filters.task} onChange={set('task')} options={Object.entries(TASK_OPTIONS)} />
         </div>
       )}
 
@@ -278,26 +282,29 @@ export function LeadsView({
             <span role="columnheader">Fonte / campanha</span>
             <span role="columnheader">Plano</span>
             <span role="columnheader">Fit</span>
-            <span role="columnheader">Na etapa</span>
-            <span role="columnheader">Próxima tarefa</span>
+            <span role="columnheader">Último contato</span>
+            <span role="columnheader">Próximo passo</span>
             <span role="columnheader"><span className="sr-only">Histórico</span></span>
           </div>
 
           {sheetRows.length === 0 && <div className="empty">Nenhum lead aqui com esses filtros.</div>}
 
           {sheetRows.map((row) => {
-            const { lead, closed, task } = row
+            const { lead, closed } = row
             const days = daysSince(lead.stageChangedAt)
-            const due = task ? dueLabel(task.dueDate) : null
             const first = firstName(lead.name)
             return (
-              <div role="row" className="grid row" key={lead.id}>
+              <div role="row" className={`grid row${row.missingStep ? ' flagged' : ''}`} key={lead.id}>
                 <div role="cell" className="person">
-                  <Avatar row={row} {...shared} />
-                  <span className="person-name">{lead.name}</span>
+                  <span className="initials" aria-hidden="true">{initials(lead.name)}</span>
+                  <div className="cell-stack" style={{ gap: 5, alignItems: 'flex-start' }}>
+                    <span className="person-name">{lead.name}</span>
+                    {row.analysis && <AnalysisButton lead={lead} onOpen={onOpenAnalysis} />}
+                  </div>
                 </div>
-                <div role="cell">
+                <div role="cell" className="cell-stack" style={{ gap: 5, alignItems: 'flex-start' }}>
                   <StageSelect lead={lead} stages={stages} onMove={requestMove} />
+                  <span className={`days${!closed && days >= 5 ? ' stale' : ''}`} title="Tempo nesta etapa">há {daysLabel(days)}</span>
                 </div>
                 <div role="cell" className="cell-stack">
                   <span className="mono" style={{ fontSize: 12 }}>{phone(lead.phone) || '—'}</span>
@@ -315,28 +322,10 @@ export function LeadsView({
                   {lead.fit ? <span className={`tag ${lead.fit}`}>{FIT_LABEL[lead.fit]}</span> : <span className="hint">—</span>}
                 </div>
                 <div role="cell">
-                  <span className={`days${!closed && days >= 5 ? ' stale' : ''}`}>{daysLabel(days)}</span>
+                  <LastContact row={row} />
                 </div>
-                <div role="cell" className="cell-stack">
-                  {task && due ? (
-                    <>
-                      <span className="strong">{task.title}</span>
-                      <span className={`due ${due.tone}`}>{due.text}</span>
-                    </>
-                  ) : closed ? (
-                    <span className="hint">—</span>
-                  ) : (
-                    <button
-                      type="button"
-                      className="link-btn"
-                      onClick={() => {
-                        setOpenNotes(null)
-                        setTaskFor(taskFor === lead.id ? null : lead.id)
-                      }}
-                    >
-                      + Criar tarefa
-                    </button>
-                  )}
+                <div role="cell">
+                  <NextStep row={row} {...shared} />
                 </div>
                 <div role="cell">
                   <button type="button" className="icon-btn sm" aria-label={`Histórico de ${first}`} title="Histórico" onClick={() => onOpenHistory(lead)}>
@@ -344,10 +333,10 @@ export function LeadsView({
                   </button>
                 </div>
 
-                {openNotes === lead.id && <NotesPopover row={row} onClose={() => setOpenNotes(null)} onOpenHistory={onOpenHistory} style={{ top: 56, left: 20 }} />}
                 {taskFor === lead.id && (
                   <TaskPopover
                     name={first}
+                    style={{ top: 56, right: 60 }}
                     onCancel={() => setTaskFor(null)}
                     onSave={async (input) => {
                       await onAddTask(lead, input)
@@ -389,29 +378,54 @@ export function LeadsView({
 
 interface SharedProps {
   stages: Stage[]
-  openNotes: string | null
-  setOpenNotes: (id: string | null) => void
+  taskFor: string | null
+  setTaskFor: (id: string | null) => void
   onOpenHistory: (lead: Lead) => void
+  onOpenAnalysis: (lead: Lead) => void
+  onAddTask: (lead: Lead, input: { title: string; dueDate: string | null }) => Promise<void>
   onMove: (lead: Lead, stageId: string) => void
 }
 
-function Avatar({ row, openNotes, setOpenNotes }: { row: LeadRow } & Pick<SharedProps, 'openNotes' | 'setOpenNotes'>) {
-  const { lead, notes } = row
-  const open = openNotes === lead.id
+function AnalysisButton({ lead, onOpen }: { lead: Lead; onOpen: (lead: Lead) => void }) {
   return (
-    <div className="avatar-wrap">
-      <span className="initials" aria-hidden="true">{initials(lead.name)}</span>
-      {notes.length > 0 && (
-        <button
-          type="button"
-          className="ai-badge"
-          aria-label={`${notes.length} ${notes.length === 1 ? 'notificação' : 'notificações'} da assistente sobre ${firstName(lead.name)}`}
-          aria-expanded={open}
-          onClick={() => setOpenNotes(open ? null : lead.id)}
-        >
-          {notes.length}
-        </button>
-      )}
+    <button type="button" className="analysis-btn" onClick={() => onOpen(lead)} aria-label={`Análise IA de ${firstName(lead.name)}`}>
+      <AssistantAvatar size={20} />
+      Análise IA
+    </button>
+  )
+}
+
+function LastContact({ row }: { row: LeadRow }) {
+  const c = row.lead.lastContact
+  if (!c) return <span className={row.closed ? 'hint' : 'due late'}>{row.closed ? '—' : 'Nunca contatado'}</span>
+  const d = daysSince(c.at)
+  const stale = !row.closed && d >= CONTACT_STALE_DAYS
+  return (
+    <div className="cell-stack">
+      <span className={stale ? 'due late' : 'strong'}>{agoLabel(c.at)}</span>
+      <span className="sub">{CONTACT_LABEL[c.kind] ?? c.kind}</span>
+    </div>
+  )
+}
+
+function NextStep({ row, setTaskFor, taskFor }: { row: LeadRow } & Pick<SharedProps, 'taskFor' | 'setTaskFor'>) {
+  const { lead, task, closed } = row
+  if (task) {
+    const due = dueLabel(task.dueDate)
+    return (
+      <div className="cell-stack">
+        <span className="strong">{task.title}</span>
+        <span className={`due ${due.tone}`}>{due.text}</span>
+      </div>
+    )
+  }
+  if (closed) return <span className="hint">—</span>
+  return (
+    <div className="missing-step">
+      <span className="missing-label">Sem próximo passo</span>
+      <button type="button" className="link-btn" onClick={() => setTaskFor(taskFor === lead.id ? null : lead.id)}>
+        + Agendar
+      </button>
     </div>
   )
 }
@@ -427,55 +441,6 @@ function StageSelect({ lead, stages, onMove, compact }: { lead: Lead; stages: St
         ))}
       </select>
     </label>
-  )
-}
-
-function NotesPopover({
-  row,
-  onClose,
-  onOpenHistory,
-  style,
-}: {
-  row: LeadRow
-  onClose: () => void
-  onOpenHistory: (lead: Lead) => void
-  style: CSSProperties
-}) {
-  const first = firstName(row.lead.name)
-  return (
-    <div className="popover ai" role="dialog" aria-label={`Notificações da assistente sobre ${first}`} style={style}>
-      <div className="popover-head">
-        <span className="eyebrow">Assistente IA · {first}</span>
-        <button type="button" className="close-btn" aria-label="Fechar" onClick={onClose}>
-          <IconClose size={14} />
-        </button>
-      </div>
-      <ul className="notes">
-        {row.notes.map((n, i) => (
-          <li key={i}>
-            <span className={`dot${n.kind === 'late' ? ' risk' : n.kind === 'today' || n.kind === 'stale' ? ' warn' : ''}`} />
-            <span>{n.text}</span>
-          </li>
-        ))}
-      </ul>
-      <div className="actions">
-        {row.insight?.actionLabel && (
-          <button type="button" className="btn ai" disabled title="Ações automáticas chegam na próxima versão">
-            {row.insight.actionLabel}
-          </button>
-        )}
-        <button
-          type="button"
-          className="btn ghost ai"
-          onClick={() => {
-            onClose()
-            onOpenHistory(row.lead)
-          }}
-        >
-          Ver histórico
-        </button>
-      </div>
-    </div>
   )
 }
 
@@ -495,7 +460,8 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
 
 // ---- Kanban -------------------------------------------------------------------------
 
-function Kanban({ rows, selected, stages, openNotes, setOpenNotes, onOpenHistory, onMove }: { rows: LeadRow[]; selected: string | 'all' } & SharedProps) {
+function Kanban({ rows, selected, ...shared }: { rows: LeadRow[]; selected: string | 'all' } & SharedProps) {
+  const { stages, taskFor, setTaskFor, onOpenHistory, onOpenAnalysis, onAddTask, onMove } = shared
   const [dragging, setDragging] = useState<string | null>(null)
   const [over, setOver] = useState<string | null>(null)
   const colRefs = useRef<Record<string, HTMLDivElement | null>>({})
@@ -539,13 +505,13 @@ function Kanban({ rows, selected, stages, openNotes, setOpenNotes, onOpenHistory
             </div>
             {cards.length === 0 && <div className="kempty">Arraste um lead para cá</div>}
             {cards.map((row) => {
-              const { lead, task, closed } = row
+              const { lead, closed } = row
               const days = daysSince(lead.stageChangedAt)
-              const due = task ? dueLabel(task.dueDate) : null
+              const first = firstName(lead.name)
               return (
                 <article
                   key={lead.id}
-                  className={`kcard${dragging === lead.id ? ' dragging' : ''}`}
+                  className={`kcard${dragging === lead.id ? ' dragging' : ''}${row.missingStep ? ' flagged' : ''}`}
                   draggable
                   onDragStart={(e) => {
                     e.dataTransfer.setData('text/plain', lead.id)
@@ -558,12 +524,12 @@ function Kanban({ rows, selected, stages, openNotes, setOpenNotes, onOpenHistory
                   }}
                 >
                   <div className="kcard-top">
-                    <Avatar row={row} openNotes={openNotes} setOpenNotes={setOpenNotes} />
+                    <span className="initials" aria-hidden="true">{initials(lead.name)}</span>
                     <div className="cell-stack" style={{ flexGrow: 1 }}>
                       <span className="person-name" style={{ fontSize: 13 }}>{lead.name}</span>
                       <span className="sub">{lead.source ?? '—'}</span>
                     </div>
-                    <button type="button" className="icon-btn sm" style={{ width: 30, height: 30 }} aria-label={`Histórico de ${firstName(lead.name)}`} title="Histórico" onClick={() => onOpenHistory(lead)}>
+                    <button type="button" className="icon-btn sm" style={{ width: 30, height: 30 }} aria-label={`Histórico de ${first}`} title="Histórico" onClick={() => onOpenHistory(lead)}>
                       <IconHistory size={15} />
                     </button>
                   </div>
@@ -572,15 +538,29 @@ function Kanban({ rows, selected, stages, openNotes, setOpenNotes, onOpenHistory
                     <span className="sub">{lead.planName ?? ''}</span>
                     <span className={`days${!closed && days >= 5 ? ' stale' : ''}`} style={{ marginLeft: 'auto' }}>{daysLabel(days)}</span>
                   </div>
-                  {task && due && (
-                    <div className="kcard-task">
-                      <span>{task.title}</span>
-                      <span className={`due ${due.tone}`}>{due.text}</span>
+                  {!closed && (
+                    <div className="kcard-contact">
+                      <span className="hint" style={{ fontSize: 11 }}>Último contato</span>
+                      <LastContactInline row={row} />
                     </div>
                   )}
+                  {!closed || row.task ? (
+                    <div className={`kcard-task${row.missingStep ? ' missing' : ''}`}>
+                      <NextStep row={row} taskFor={taskFor} setTaskFor={setTaskFor} />
+                    </div>
+                  ) : null}
+                  {row.analysis && <AnalysisButton lead={lead} onOpen={onOpenAnalysis} />}
                   <StageSelect lead={lead} stages={stages} onMove={onMove} compact />
-                  {openNotes === lead.id && (
-                    <NotesPopover row={row} onClose={() => setOpenNotes(null)} onOpenHistory={onOpenHistory} style={{ top: 48, left: 8, width: 320 }} />
+                  {taskFor === lead.id && (
+                    <TaskPopover
+                      name={first}
+                      style={{ top: 48, left: 8, width: 300 }}
+                      onCancel={() => setTaskFor(null)}
+                      onSave={async (input) => {
+                        await onAddTask(lead, input)
+                        setTaskFor(null)
+                      }}
+                    />
                   )}
                 </article>
               )
@@ -589,6 +569,17 @@ function Kanban({ rows, selected, stages, openNotes, setOpenNotes, onOpenHistory
         )
       })}
     </div>
+  )
+}
+
+function LastContactInline({ row }: { row: LeadRow }) {
+  const c = row.lead.lastContact
+  if (!c) return <span className={row.closed ? 'hint' : 'due late'} style={{ fontSize: 12 }}>{row.closed ? '—' : 'Nunca'}</span>
+  const stale = !row.closed && daysSince(c.at) >= CONTACT_STALE_DAYS
+  return (
+    <span className={stale ? 'due late' : 'strong'} style={{ fontSize: 12 }}>
+      {agoLabel(c.at)} · {CONTACT_LABEL[c.kind] ?? c.kind}
+    </span>
   )
 }
 
@@ -639,10 +630,12 @@ function LostDialog({ name, onCancel, onConfirm }: { name: string; onCancel: () 
 
 function TaskPopover({
   name,
+  style,
   onCancel,
   onSave,
 }: {
   name: string
+  style: CSSProperties
   onCancel: () => void
   onSave: (input: { title: string; dueDate: string | null }) => Promise<void>
 }) {
@@ -667,16 +660,16 @@ function TaskPopover({
   }
 
   return (
-    <form className="popover" onSubmit={submit} aria-label={`Nova tarefa para ${name}`} style={{ top: 56, right: 60, width: 340 }}>
+    <form className="popover" onSubmit={submit} aria-label={`Nova tarefa para ${name}`} style={{ width: 340, ...style }}>
       <div className="popover-head">
-        <span className="eyebrow">Nova tarefa · {name}</span>
+        <span className="eyebrow">Próximo passo · {name}</span>
         <button type="button" className="close-btn" aria-label="Cancelar" onClick={onCancel}>
           <IconClose size={14} />
         </button>
       </div>
       <label className="field">
         Tarefa
-        <input ref={inputRef} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ex.: Ligar para confirmar visita" />
+        <input ref={inputRef} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ex.: Ligar para agendar aula experimental" />
       </label>
       <label className="field">
         Prazo
@@ -684,7 +677,7 @@ function TaskPopover({
       </label>
       {error && <span className="form-error" role="alert">{error}</span>}
       <div className="actions">
-        <button type="submit" className="btn" disabled={busy}>{busy ? 'Salvando…' : 'Criar tarefa'}</button>
+        <button type="submit" className="btn" disabled={busy}>{busy ? 'Salvando…' : 'Agendar'}</button>
       </div>
     </form>
   )

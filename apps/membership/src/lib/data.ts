@@ -27,6 +27,8 @@ export interface Lead {
   priority: number
   stageChangedAt: string
   lostReason: string | null
+  /** Latest message, call, e-mail or meeting with the lead. */
+  lastContact: { at: string; kind: string } | null
 }
 
 export interface Task {
@@ -36,13 +38,25 @@ export interface Task {
   dueDate: string | null
 }
 
+/** The assistant's structured analysis of a lead in Proposta or Negociação. */
+export interface Analysis {
+  kind: 'proposal' | 'negotiation'
+  summary: string
+  conversations: string[]
+  negotiation?: string[]
+  tips: string[]
+  next_step: string
+  proposal?: { subject: string; body: string }
+}
+
 export interface Insight {
   id: string
-  scope: 'lead' | 'stage' | 'pipeline'
+  scope: 'lead' | 'stage' | 'pipeline' | 'analysis'
   leadId: string | null
   stageId: string | null
   body: string
   actionLabel: string | null
+  details: Analysis | null
 }
 
 export interface Workspace {
@@ -66,6 +80,16 @@ export interface HistoryItem {
   title: string
   body: string | null
   createdAt: string
+}
+
+/** Activity kinds that count as talking to the lead. */
+const CONTACT_KINDS = ['message', 'call', 'email', 'meeting']
+
+export const CONTACT_LABEL: Record<string, string> = {
+  message: 'WhatsApp',
+  call: 'Ligação',
+  email: 'E-mail',
+  meeting: 'Aula / visita',
 }
 
 // PostgREST returns an embedded to-one row as an object (or null).
@@ -113,7 +137,7 @@ export async function loadWorkspace(): Promise<Workspace | null> {
 }
 
 export async function loadFunnel(tenantId: string): Promise<FunnelData> {
-  const [stagesRes, leadsRes, tasksRes, insightsRes] = await Promise.all([
+  const [stagesRes, leadsRes, tasksRes, insightsRes, contactsRes] = await Promise.all([
     supabase.from('m_pipeline_stages').select('id, name, position, kind').eq('tenant_id', tenantId).order('position'),
     supabase
       .from('m_leads')
@@ -129,12 +153,26 @@ export async function loadFunnel(tenantId: string): Promise<FunnelData> {
       .in('status', ['todo', 'in_progress'])
       .not('lead_id', 'is', null)
       .order('due_date', { ascending: true, nullsFirst: false }),
-    supabase.from('m_ai_insights').select('id, scope, lead_id, stage_id, body, action_label').eq('tenant_id', tenantId),
+    supabase.from('m_ai_insights').select('id, scope, lead_id, stage_id, body, action_label, details').eq('tenant_id', tenantId),
+    supabase
+      .from('m_activities')
+      .select('lead_id, kind, created_at')
+      .eq('tenant_id', tenantId)
+      .in('kind', CONTACT_KINDS)
+      .not('lead_id', 'is', null)
+      .order('created_at', { ascending: false }),
   ])
   fail(stagesRes.error, 'as etapas')
   fail(leadsRes.error, 'os leads')
   fail(tasksRes.error, 'as tarefas')
   fail(insightsRes.error, 'os comentários da assistente')
+  fail(contactsRes.error, 'os últimos contatos')
+
+  // Rows come newest first, so the first one per lead is its last contact.
+  const lastContact = new Map<string, { at: string; kind: string }>()
+  for (const a of (contactsRes.data ?? []) as { lead_id: string; kind: string; created_at: string }[]) {
+    if (!lastContact.has(a.lead_id)) lastContact.set(a.lead_id, { at: a.created_at, kind: a.kind })
+  }
 
   type LeadRow = {
     id: string
@@ -167,6 +205,7 @@ export async function loadFunnel(tenantId: string): Promise<FunnelData> {
     priority: l.ai_priority ?? 0,
     stageChangedAt: l.stage_changed_at,
     lostReason: l.lost_reason,
+    lastContact: lastContact.get(l.id) ?? null,
   }))
 
   return {
@@ -185,6 +224,7 @@ export async function loadFunnel(tenantId: string): Promise<FunnelData> {
       stage_id: string | null
       body: string
       action_label: string | null
+      details: Record<string, unknown> | null
     }[]).map((i) => ({
       id: i.id,
       scope: i.scope,
@@ -192,6 +232,7 @@ export async function loadFunnel(tenantId: string): Promise<FunnelData> {
       stageId: i.stage_id,
       body: i.body,
       actionLabel: i.action_label,
+      details: i.scope === 'analysis' ? (i.details as unknown as Analysis) : null,
     })),
   }
 }
@@ -210,7 +251,7 @@ export async function loadHistory(leadId: string): Promise<HistoryItem[]> {
     email: 'E-mail',
     stage_change: 'Mudança de etapa',
     system: 'Sistema',
-    meeting: 'Reunião',
+    meeting: 'Aula / visita',
   }
   return (data ?? []).map((a) => {
     const meta = (a.metadata ?? {}) as { title?: string }
@@ -287,6 +328,21 @@ export async function addTask(input: {
     title: input.title,
     due_date: input.dueDate,
     origin: 'manual',
+    created_by: auth.user?.id ?? null,
+  })
+  if (error) throw new Error(friendlyError(error.message))
+}
+
+/** Records in the lead history that a proposal was sent by e-mail. */
+export async function logProposalSent(input: { tenantId: string; lead: Lead; subject: string }): Promise<void> {
+  const { data: auth } = await supabase.auth.getUser()
+  const { error } = await supabase.from('m_activities').insert({
+    tenant_id: input.tenantId,
+    person_id: input.lead.personId,
+    lead_id: input.lead.id,
+    kind: 'email',
+    body: input.subject,
+    metadata: { title: 'Proposta enviada' },
     created_by: auth.user?.id ?? null,
   })
   if (error) throw new Error(friendlyError(error.message))
