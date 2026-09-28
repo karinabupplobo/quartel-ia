@@ -74,6 +74,9 @@ export const IconMail = (p: IconProps) => (
 export const IconNote = (p: IconProps) => (
   <svg {...base({ strokeWidth: 2, ...p })}><path d="M5 4h10l4 4v12H5z" /><path d="M9 12h6M9 16h4" /></svg>
 )
+export const IconFilter = (p: IconProps) => (
+  <svg {...base({ strokeWidth: 2, ...p })}><path d="M4 6h16M7 12h10M10 18h4" /></svg>
+)
 export const IconLogout = (p: IconProps) => (
   <svg {...base(p)}><path d="M15 4h4v16h-4" /><path d="M10 8l-4 4 4 4" /><path d="M6 12h10" /></svg>
 )

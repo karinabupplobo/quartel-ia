@@ -243,6 +243,35 @@ export async function addLead(input: {
   if (error) throw new Error(friendlyError(error.message))
 }
 
+/** Moves a lead to another funnel stage and records it in the lead history. */
+export async function moveLead(input: {
+  tenantId: string
+  lead: Lead
+  stage: Stage
+  lostReason?: string | null
+}): Promise<void> {
+  const { data: auth } = await supabase.auth.getUser()
+  const { error } = await supabase
+    .from('m_leads')
+    .update({
+      stage_id: input.stage.id,
+      stage_changed_at: new Date().toISOString(),
+      lost_reason: input.stage.kind === 'lost' ? input.lostReason ?? null : null,
+    })
+    .eq('id', input.lead.id)
+  if (error) throw new Error(friendlyError(error.message))
+  const { error: actError } = await supabase.from('m_activities').insert({
+    tenant_id: input.tenantId,
+    person_id: input.lead.personId,
+    lead_id: input.lead.id,
+    kind: 'stage_change',
+    body: input.stage.kind === 'lost' && input.lostReason ? `Motivo: ${input.lostReason}` : null,
+    metadata: { title: `Movido para ${input.stage.name}` },
+    created_by: auth.user?.id ?? null,
+  })
+  if (actError) throw new Error(friendlyError(actError.message))
+}
+
 export async function addTask(input: {
   tenantId: string
   leadId: string

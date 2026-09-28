@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { FunnelData, Lead, Workspace } from '../lib/data'
-import { addLead, addTask, loadFunnel } from '../lib/data'
-import { daysLabel, daysSince, dueLabel, initials } from '../lib/format'
+import type { FunnelData, Lead, Stage, Workspace } from '../lib/data'
+import { addLead, addTask, loadFunnel, moveLead } from '../lib/data'
+import { daysLabel, daysSince, dueLabel, firstName, initials } from '../lib/format'
 import { Assistant } from '../components/Assistant'
 import { HistoryDrawer } from '../components/HistoryDrawer'
 import { IconImage, IconSearch } from '../components/icons'
-import { LeadTable } from '../components/LeadTable'
-import type { Note, TableRow } from '../components/LeadTable'
+import { LeadsView } from '../components/LeadTable'
+import type { LeadRow, Note } from '../components/LeadTable'
 import { Pipeline } from '../components/Pipeline'
 import type { Selection } from '../components/Pipeline'
 import { Sidebar } from '../components/Sidebar'
@@ -18,6 +18,13 @@ export function FunnelPage({ workspace, onSignOut }: { workspace: Workspace; onS
   const [query, setQuery] = useState('')
   const [historyLead, setHistoryLead] = useState<Lead | null>(null)
   const [assistantOpen, setAssistantOpen] = useState(false)
+  const [toast, setToast] = useState<{ text: string; stageId: string } | null>(null)
+
+  useEffect(() => {
+    if (!toast) return
+    const t = window.setTimeout(() => setToast(null), 5000)
+    return () => window.clearTimeout(t)
+  }, [toast])
 
   const refresh = useCallback(async () => {
     try {
@@ -46,8 +53,8 @@ export function FunnelPage({ workspace, onSignOut }: { workspace: Workspace; onS
   const nextTask = (leadId: string) => data.tasks.find((t) => t.leadId === leadId)
   const leadInsight = (leadId: string) => data.insights.find((i) => i.scope === 'lead' && i.leadId === leadId)
 
-  const rows: TableRow[] = data.leads
-    .filter((l) => (selected === 'all' || l.stageId === selected) && (!q || l.name.toLowerCase().includes(q)))
+  const rows: LeadRow[] = data.leads
+    .filter((l) => !q || l.name.toLowerCase().includes(q))
     .sort((a, b) => b.priority - a.priority)
     .map((lead) => {
       const stage = stageById.get(lead.stageId)
@@ -67,7 +74,6 @@ export function FunnelPage({ workspace, onSignOut }: { workspace: Workspace; onS
       return { lead, stageName: stage?.name ?? '', closed, task, insight, notes }
     })
 
-  const selectedStage = selected === 'all' ? null : stageById.get(selected)
   const firstStage = data.stages[0]
   const assistantMessage =
     (selected === 'all'
@@ -100,11 +106,10 @@ export function FunnelPage({ workspace, onSignOut }: { workspace: Workspace; onS
           wonThisMonth={wonThisMonth}
         />
 
-        <LeadTable
-          key={selected}
-          title={selectedStage ? selectedStage.name : 'Todos os leads'}
+        <LeadsView
           rows={rows}
-          showStage={selected === 'all'}
+          stages={data.stages}
+          selected={selected}
           canAdd={!!firstStage && (selected === 'all' || selected === firstStage.id)}
           onOpenHistory={setHistoryLead}
           onAddLead={async (input) => {
@@ -116,6 +121,11 @@ export function FunnelPage({ workspace, onSignOut }: { workspace: Workspace; onS
             await addTask({ tenantId: workspace.tenantId, leadId: lead.id, personId: lead.personId, ...input })
             await refresh()
           }}
+          onMove={async (lead: Lead, stage: Stage, lostReason?: string | null) => {
+            await moveLead({ tenantId: workspace.tenantId, lead, stage, lostReason })
+            await refresh()
+            setToast({ text: `${firstName(lead.name)} foi para ${stage.name}`, stageId: stage.id })
+          }}
         />
       </main>
 
@@ -126,6 +136,13 @@ export function FunnelPage({ workspace, onSignOut }: { workspace: Workspace; onS
           insight={leadInsight(historyLead.id)}
           onClose={() => setHistoryLead(null)}
         />
+      )}
+
+      {toast && (
+        <div className="toast" role="status">
+          {toast.text}
+          <button type="button" onClick={() => { setSelected(toast.stageId); setToast(null) }}>Ver etapa</button>
+        </div>
       )}
 
       <Assistant

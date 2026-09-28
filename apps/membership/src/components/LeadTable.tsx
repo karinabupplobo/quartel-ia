@@ -1,16 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
-import type { Fit, Insight, Lead, Task } from '../lib/data'
+import type { CSSProperties, DragEvent, FormEvent } from 'react'
+import type { Fit, Insight, Lead, Stage, Task } from '../lib/data'
 import { daysLabel, daysSince, dueLabel, firstName, initials, phone, planPrice } from '../lib/format'
-import { IconClose, IconDownload, IconHistory, IconPlus } from './icons'
+import { IconClose, IconDownload, IconFilter, IconHistory, IconPlus } from './icons'
 
 const FIT_LABEL: Record<Fit, string> = { high: 'Alto', medium: 'Médio', low: 'Baixo' }
-const FIT_OPTIONS: { id: Fit | 'all'; label: string }[] = [
-  { id: 'all', label: 'Todos' },
-  { id: 'high', label: 'Alto' },
-  { id: 'medium', label: 'Médio' },
-  { id: 'low', label: 'Baixo' },
-]
 
 /** Something the assistant flags about a lead (shown as the purple counter). */
 export interface Note {
@@ -18,7 +12,7 @@ export interface Note {
   text: string
 }
 
-export interface TableRow {
+export interface LeadRow {
   lead: Lead
   stageName: string
   closed: boolean
@@ -27,42 +21,97 @@ export interface TableRow {
   notes: Note[]
 }
 
-export function LeadTable({
-  title,
+type ViewMode = 'sheet' | 'kanban'
+
+interface Filters {
+  text: string
+  stage: string
+  source: string
+  campaign: string
+  plan: string
+  fit: string
+  days: string
+  task: string
+  notes: string
+}
+
+const EMPTY: Filters = { text: '', stage: '', source: '', campaign: '', plan: '', fit: '', days: '', task: '', notes: '' }
+
+const DAYS_OPTIONS: Record<string, string> = { '0-2': 'Até 2 dias', '3-4': '3 a 4 dias', '5+': '5 dias ou mais' }
+const TASK_OPTIONS: Record<string, string> = {
+  late: 'Atrasada',
+  today: 'Para hoje',
+  any: 'Com tarefa',
+  none: 'Sem tarefa',
+}
+const NOTE_OPTIONS: Record<string, string> = { yes: 'Com notificações', no: 'Sem notificações' }
+
+function matches(r: LeadRow, f: Filters): boolean {
+  const l = r.lead
+  if (f.text) {
+    const q = f.text.toLowerCase()
+    const hay = [l.name, l.email ?? '', l.phone ?? '', phone(l.phone)].join(' ').toLowerCase()
+    if (!hay.includes(q)) return false
+  }
+  if (f.stage && l.stageId !== f.stage) return false
+  if (f.source && l.source !== f.source) return false
+  if (f.campaign && l.campaign !== f.campaign) return false
+  if (f.plan && l.planName !== f.plan) return false
+  if (f.fit && l.fit !== f.fit) return false
+  if (f.days) {
+    const d = daysSince(l.stageChangedAt)
+    if (f.days === '0-2' && d > 2) return false
+    if (f.days === '3-4' && (d < 3 || d > 4)) return false
+    if (f.days === '5+' && d < 5) return false
+  }
+  if (f.task) {
+    const tone = r.task ? dueLabel(r.task.dueDate).tone : null
+    if (f.task === 'late' && tone !== 'late') return false
+    if (f.task === 'today' && tone !== 'today') return false
+    if (f.task === 'any' && !r.task) return false
+    if (f.task === 'none' && r.task) return false
+  }
+  if (f.notes === 'yes' && r.notes.length === 0) return false
+  if (f.notes === 'no' && r.notes.length > 0) return false
+  return true
+}
+
+function uniq(values: (string | null)[]): string[] {
+  return Array.from(new Set(values.filter((v): v is string => !!v))).sort((a, b) => a.localeCompare(b, 'pt-BR'))
+}
+
+export function LeadsView({
   rows,
-  showStage,
+  stages,
+  selected,
   canAdd,
   onOpenHistory,
   onAddLead,
   onAddTask,
+  onMove,
 }: {
-  title: string
-  rows: TableRow[]
-  showStage: boolean
+  rows: LeadRow[]
+  stages: Stage[]
+  selected: string | 'all'
   canAdd: boolean
   onOpenHistory: (lead: Lead) => void
   onAddLead: (input: { name: string; phone: string | null; email: string | null }) => Promise<void>
   onAddTask: (lead: Lead, input: { title: string; dueDate: string | null }) => Promise<void>
+  onMove: (lead: Lead, stage: Stage, lostReason?: string | null) => Promise<void>
 }) {
-  const [fit, setFit] = useState<Fit | 'all'>('all')
-  const [source, setSource] = useState('all')
-  const [openInsight, setOpenInsight] = useState<string | null>(null)
+  const [mode, setMode] = useState<ViewMode>('sheet')
+  const [filters, setFilters] = useState<Filters>(EMPTY)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [openNotes, setOpenNotes] = useState<string | null>(null)
   const [taskFor, setTaskFor] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
+  const [lostFor, setLostFor] = useState<{ lead: Lead; stage: Stage } | null>(null)
+  const [moveError, setMoveError] = useState<string | null>(null)
 
-  const sources = useMemo(
-    () => Array.from(new Set(rows.map((r) => r.lead.source).filter((s): s is string => !!s))).sort(),
-    [rows],
-  )
-  const visible = rows.filter(
-    (r) => (fit === 'all' || r.lead.fit === fit) && (source === 'all' || r.lead.source === source),
-  )
-
-  // Close any popover with Escape.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
-        setOpenInsight(null)
+        setOpenNotes(null)
         setTaskFor(null)
       }
     }
@@ -70,9 +119,57 @@ export function LeadTable({
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  const options = useMemo(
+    () => ({
+      source: uniq(rows.map((r) => r.lead.source)),
+      campaign: uniq(rows.map((r) => r.lead.campaign)),
+      plan: uniq(rows.map((r) => r.lead.planName)),
+    }),
+    [rows],
+  )
+
+  const stageName = (id: string) => stages.find((s) => s.id === id)?.name ?? ''
+  const filtered = rows.filter((r) => matches(r, filters))
+  // The sheet follows the funnel selection; the kanban always shows every stage.
+  const sheetRows = selected === 'all' ? filtered : filtered.filter((r) => r.lead.stageId === selected)
+  const selectedName = selected === 'all' ? 'Todos os leads' : stageName(selected)
+  const count = mode === 'sheet' ? sheetRows.length : filtered.length
+
+  const active = (Object.keys(EMPTY) as (keyof Filters)[]).filter((k) => filters[k])
+  const chipLabel = (k: keyof Filters): string => {
+    const v = filters[k]
+    switch (k) {
+      case 'text': return `Contém “${v}”`
+      case 'stage': return `Etapa: ${stageName(v)}`
+      case 'source': return `Fonte: ${v}`
+      case 'campaign': return `Campanha: ${v}`
+      case 'plan': return `Plano: ${v}`
+      case 'fit': return `Fit: ${FIT_LABEL[v as Fit]}`
+      case 'days': return `Na etapa: ${DAYS_OPTIONS[v]}`
+      case 'task': return `Tarefa: ${TASK_OPTIONS[v]}`
+      case 'notes': return NOTE_OPTIONS[v]
+    }
+  }
+
+  async function requestMove(lead: Lead, stageId: string) {
+    const stage = stages.find((s) => s.id === stageId)
+    if (!stage || stage.id === lead.stageId) return
+    setMoveError(null)
+    if (stage.kind === 'lost') {
+      setLostFor({ lead, stage })
+      return
+    }
+    try {
+      await onMove(lead, stage)
+    } catch (e) {
+      setMoveError((e as Error).message)
+    }
+  }
+
   function exportCsv() {
-    const header = ['Nome', 'Telefone', 'E-mail', 'Etapa', 'Fonte', 'Campanha', 'Plano', 'Fit ICP', 'Dias na etapa', 'Próxima tarefa']
-    const lines = visible.map((r) => [
+    const list = mode === 'sheet' ? sheetRows : filtered
+    const header = ['Nome', 'Telefone', 'E-mail', 'Etapa', 'Fonte', 'Campanha', 'Plano', 'Fit', 'Dias na etapa', 'Próxima tarefa']
+    const lines = list.map((r) => [
       r.lead.name,
       phone(r.lead.phone),
       r.lead.email ?? '',
@@ -89,189 +186,454 @@ export function LeadTable({
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `leads-${title.toLowerCase().replace(/\W+/g, '-')}.csv`
+    a.download = `leads-${selectedName.toLowerCase().replace(/\W+/g, '-')}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
 
+  const set = (k: keyof Filters) => (v: string) => setFilters((f) => ({ ...f, [k]: v }))
+
+  const shared = {
+    stages,
+    openNotes,
+    setOpenNotes: (id: string | null) => {
+      setTaskFor(null)
+      setOpenNotes(id)
+    },
+    onOpenHistory,
+    onMove: requestMove,
+  }
+
   return (
-    <section className="card table-card" aria-label={`Leads: ${title}`}>
+    <section className="card table-card" aria-label={`Leads: ${selectedName}`}>
       <div className="table-head">
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          <h2>{title}</h2>
-          <span className="hint">{visible.length === 1 ? '1 lead' : `${visible.length} leads`}</span>
+          <h2>{mode === 'sheet' ? selectedName : 'Todas as etapas'}</h2>
+          <span className="hint">{count === 1 ? '1 lead' : `${count} leads`}</span>
         </div>
         <div className="table-tools">
-          <div className="segmented" role="group" aria-label="Filtrar por fit de ICP">
-            <span className="segmented-label">Fit ICP</span>
-            {FIT_OPTIONS.map((o) => (
-              <button key={o.id} type="button" aria-pressed={fit === o.id} onClick={() => setFit(o.id)}>
-                {o.label}
-              </button>
-            ))}
+          <button
+            type="button"
+            className={`tool-btn${filtersOpen || active.length ? ' on' : ''}`}
+            aria-expanded={filtersOpen}
+            aria-controls="filtros"
+            onClick={() => setFiltersOpen((o) => !o)}
+          >
+            <IconFilter size={16} />
+            Filtros
+            {active.length > 0 && <span className="count-pill">{active.length}</span>}
+          </button>
+          <div className="segmented" role="group" aria-label="Formato">
+            <span className="segmented-label">Formato</span>
+            <button type="button" aria-pressed={mode === 'sheet'} onClick={() => setMode('sheet')}>Planilha</button>
+            <button type="button" aria-pressed={mode === 'kanban'} onClick={() => setMode('kanban')}>Kanban</button>
           </div>
-          <label className="sr-only" htmlFor="fonte">Fonte</label>
-          <select id="fonte" className="select" value={source} onChange={(e) => setSource(e.target.value)}>
-            <option value="all">Fonte: todas</option>
-            {sources.map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-          <button type="button" className="icon-btn" aria-label="Exportar planilha (CSV)" title="Exportar planilha" onClick={exportCsv}>
+          <button type="button" className="icon-btn" aria-label="Exportar (CSV)" title="Exportar" onClick={exportCsv}>
             <IconDownload size={18} />
           </button>
         </div>
       </div>
 
-      <div role="table" aria-label={title}>
-        <div role="row" className="grid header">
-          <span role="columnheader">Nome</span>
-          <span role="columnheader">Contato</span>
-          <span role="columnheader">Fonte / campanha</span>
-          <span role="columnheader">Plano</span>
-          <span role="columnheader">Fit ICP</span>
-          <span role="columnheader">Na etapa</span>
-          <span role="columnheader">Próxima tarefa</span>
-          <span role="columnheader"><span className="sr-only">Histórico</span></span>
+      {filtersOpen && (
+        <div id="filtros" className="filter-panel" role="region" aria-label="Filtros">
+          <label className="field">
+            Nome, telefone ou e-mail
+            <input value={filters.text} onChange={(e) => set('text')(e.target.value)} placeholder="Digite para filtrar" />
+          </label>
+          {mode === 'sheet' && selected === 'all' && (
+            <FilterSelect label="Etapa" value={filters.stage} onChange={set('stage')} options={stages.map((s) => [s.id, s.name])} />
+          )}
+          <FilterSelect label="Fonte" value={filters.source} onChange={set('source')} options={options.source.map((v) => [v, v])} />
+          <FilterSelect label="Campanha" value={filters.campaign} onChange={set('campaign')} options={options.campaign.map((v) => [v, v])} />
+          <FilterSelect label="Plano" value={filters.plan} onChange={set('plan')} options={options.plan.map((v) => [v, v])} />
+          <FilterSelect label="Fit" value={filters.fit} onChange={set('fit')} options={Object.entries(FIT_LABEL)} />
+          <FilterSelect label="Na etapa" value={filters.days} onChange={set('days')} options={Object.entries(DAYS_OPTIONS)} />
+          <FilterSelect label="Próxima tarefa" value={filters.task} onChange={set('task')} options={Object.entries(TASK_OPTIONS)} />
+          <FilterSelect label="Notificações" value={filters.notes} onChange={set('notes')} options={Object.entries(NOTE_OPTIONS)} />
         </div>
+      )}
 
-        {visible.length === 0 && <div className="empty">Nenhum lead aqui com esses filtros.</div>}
+      {active.length > 0 && (
+        <div className="chips" aria-label="Filtros ativos">
+          {active.map((k) => (
+            <span key={k} className="chip">
+              {chipLabel(k)}
+              <button type="button" aria-label={`Remover filtro ${chipLabel(k)}`} onClick={() => set(k)('')}>
+                <IconClose size={12} />
+              </button>
+            </span>
+          ))}
+          <button type="button" className="link-btn" onClick={() => setFilters(EMPTY)}>Limpar filtros</button>
+        </div>
+      )}
 
-        {visible.map(({ lead, stageName, closed, task, insight, notes }) => {
-          const days = daysSince(lead.stageChangedAt)
-          const stale = !closed && days >= 5
-          const due = task ? dueLabel(task.dueDate) : null
-          const first = firstName(lead.name)
-          const insightOpen = openInsight === lead.id
-          return (
-            <div role="row" className="grid row" key={lead.id}>
-              <div role="cell" className="person">
-                <div className="avatar-wrap">
-                  <span className="initials" aria-hidden="true">{initials(lead.name)}</span>
-                  {notes.length > 0 && (
+      {moveError && <p className="form-error" role="alert" style={{ margin: '0 20px 12px' }}>{moveError}</p>}
+
+      {mode === 'sheet' ? (
+        <div role="table" aria-label={selectedName}>
+          <div role="row" className="grid header">
+            <span role="columnheader">Nome</span>
+            <span role="columnheader">Etapa</span>
+            <span role="columnheader">Contato</span>
+            <span role="columnheader">Fonte / campanha</span>
+            <span role="columnheader">Plano</span>
+            <span role="columnheader">Fit</span>
+            <span role="columnheader">Na etapa</span>
+            <span role="columnheader">Próxima tarefa</span>
+            <span role="columnheader"><span className="sr-only">Histórico</span></span>
+          </div>
+
+          {sheetRows.length === 0 && <div className="empty">Nenhum lead aqui com esses filtros.</div>}
+
+          {sheetRows.map((row) => {
+            const { lead, closed, task } = row
+            const days = daysSince(lead.stageChangedAt)
+            const due = task ? dueLabel(task.dueDate) : null
+            const first = firstName(lead.name)
+            return (
+              <div role="row" className="grid row" key={lead.id}>
+                <div role="cell" className="person">
+                  <Avatar row={row} {...shared} />
+                  <span className="person-name">{lead.name}</span>
+                </div>
+                <div role="cell">
+                  <StageSelect lead={lead} stages={stages} onMove={requestMove} />
+                </div>
+                <div role="cell" className="cell-stack">
+                  <span className="mono" style={{ fontSize: 12 }}>{phone(lead.phone) || '—'}</span>
+                  <span className="sub">{lead.email ?? ''}</span>
+                </div>
+                <div role="cell" className="cell-stack">
+                  <span className="strong">{lead.source ?? '—'}</span>
+                  {lead.campaign && <span className="sub">{lead.campaign}</span>}
+                </div>
+                <div role="cell" className="cell-stack">
+                  <span className="strong">{lead.planName ?? '—'}</span>
+                  <span className="sub mono">{planPrice(lead.planPriceCents, lead.planCycle)}</span>
+                </div>
+                <div role="cell">
+                  {lead.fit ? <span className={`tag ${lead.fit}`}>{FIT_LABEL[lead.fit]}</span> : <span className="hint">—</span>}
+                </div>
+                <div role="cell">
+                  <span className={`days${!closed && days >= 5 ? ' stale' : ''}`}>{daysLabel(days)}</span>
+                </div>
+                <div role="cell" className="cell-stack">
+                  {task && due ? (
+                    <>
+                      <span className="strong">{task.title}</span>
+                      <span className={`due ${due.tone}`}>{due.text}</span>
+                    </>
+                  ) : closed ? (
+                    <span className="hint">—</span>
+                  ) : (
                     <button
                       type="button"
-                      className="ai-badge"
-                      aria-label={`${notes.length} ${notes.length === 1 ? 'notificação' : 'notificações'} da assistente sobre ${first}`}
-                      aria-expanded={insightOpen}
+                      className="link-btn"
                       onClick={() => {
-                        setTaskFor(null)
-                        setOpenInsight(insightOpen ? null : lead.id)
+                        setOpenNotes(null)
+                        setTaskFor(taskFor === lead.id ? null : lead.id)
                       }}
                     >
-                      {notes.length}
+                      + Criar tarefa
                     </button>
                   )}
                 </div>
-                <div className="cell-stack">
-                  <span className="person-name">{lead.name}</span>
-                  {showStage && <span className="sub">{stageName}</span>}
-                </div>
-              </div>
-              <div role="cell" className="cell-stack">
-                <span className="mono" style={{ fontSize: 12 }}>{phone(lead.phone) || '—'}</span>
-                <span className="sub">{lead.email ?? ''}</span>
-              </div>
-              <div role="cell" className="cell-stack">
-                <span className="strong">{lead.source ?? '—'}</span>
-                {lead.campaign && <span className="sub">{lead.campaign}</span>}
-              </div>
-              <div role="cell" className="cell-stack">
-                <span className="strong">{lead.planName ?? '—'}</span>
-                <span className="sub mono">{planPrice(lead.planPriceCents, lead.planCycle)}</span>
-              </div>
-              <div role="cell">
-                {lead.fit ? <span className={`tag ${lead.fit}`}>{FIT_LABEL[lead.fit]}</span> : <span className="hint">—</span>}
-              </div>
-              <div role="cell">
-                <span className={`days${stale ? ' stale' : ''}`}>{daysLabel(days)}</span>
-              </div>
-              <div role="cell" className="cell-stack">
-                {task && due ? (
-                  <>
-                    <span className="strong">{task.title}</span>
-                    <span className={`due ${due.tone}`}>{due.text}</span>
-                  </>
-                ) : closed ? (
-                  <span className="hint">—</span>
-                ) : (
-                  <button
-                    type="button"
-                    className="link-btn"
-                    onClick={() => {
-                      setOpenInsight(null)
-                      setTaskFor(taskFor === lead.id ? null : lead.id)
-                    }}
-                  >
-                    + Criar tarefa
+                <div role="cell">
+                  <button type="button" className="icon-btn sm" aria-label={`Histórico de ${first}`} title="Histórico" onClick={() => onOpenHistory(lead)}>
+                    <IconHistory size={18} />
                   </button>
+                </div>
+
+                {openNotes === lead.id && <NotesPopover row={row} onClose={() => setOpenNotes(null)} onOpenHistory={onOpenHistory} style={{ top: 56, left: 20 }} />}
+                {taskFor === lead.id && (
+                  <TaskPopover
+                    name={first}
+                    onCancel={() => setTaskFor(null)}
+                    onSave={async (input) => {
+                      await onAddTask(lead, input)
+                      setTaskFor(null)
+                    }}
+                  />
                 )}
               </div>
-              <div role="cell">
-                <button type="button" className="icon-btn sm" aria-label={`Histórico de ${first}`} title="Histórico" onClick={() => onOpenHistory(lead)}>
-                  <IconHistory size={18} />
-                </button>
-              </div>
+            )
+          })}
 
-              {insightOpen && notes.length > 0 && (
-                <div className="popover ai" role="dialog" aria-label={`Notificações da assistente sobre ${first}`} style={{ top: 56, left: 20 }}>
-                  <div className="popover-head">
-                    <span className="eyebrow">Assistente IA · {first}</span>
-                    <button type="button" className="close-btn" aria-label="Fechar" onClick={() => setOpenInsight(null)}>
-                      <IconClose size={14} />
-                    </button>
-                  </div>
-                  <ul className="notes">
-                    {notes.map((n, i) => (
-                      <li key={i}>
-                        <span className={`dot${n.kind === 'late' ? ' risk' : n.kind === 'today' || n.kind === 'stale' ? ' warn' : ''}`} />
-                        <span>{n.text}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="actions">
-                    {insight?.actionLabel && (
-                      <button type="button" className="btn ai" disabled title="Ações automáticas chegam na próxima versão">
-                        {insight.actionLabel}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="btn ghost ai"
-                      onClick={() => {
-                        setOpenInsight(null)
-                        onOpenHistory(lead)
-                      }}
-                    >
-                      Ver histórico
-                    </button>
-                  </div>
-                </div>
-              )}
+          {canAdd && !adding && (
+            <button type="button" className="add-row" onClick={() => setAdding(true)} style={{ width: '100%' }}>
+              <IconPlus size={16} />
+              Adicionar lead
+            </button>
+          )}
+          {canAdd && adding && <AddLeadForm onCancel={() => setAdding(false)} onSave={async (input) => { await onAddLead(input); setAdding(false) }} />}
+        </div>
+      ) : (
+        <Kanban rows={filtered} selected={selected} {...shared} />
+      )}
 
-              {taskFor === lead.id && (
-                <TaskPopover
-                  name={first}
-                  onCancel={() => setTaskFor(null)}
-                  onSave={async (input) => {
-                    await onAddTask(lead, input)
-                    setTaskFor(null)
-                  }}
-                />
-              )}
-            </div>
-          )
-        })}
+      {lostFor && (
+        <LostDialog
+          name={firstName(lostFor.lead.name)}
+          onCancel={() => setLostFor(null)}
+          onConfirm={async (reason) => {
+            await onMove(lostFor.lead, lostFor.stage, reason)
+            setLostFor(null)
+          }}
+        />
+      )}
+    </section>
+  )
+}
 
-        {canAdd && !adding && (
-          <button type="button" className="add-row" onClick={() => setAdding(true)} style={{ width: '100%' }}>
-            <IconPlus size={16} />
-            Adicionar lead
+// ---- Pieces shared by the sheet and the kanban -------------------------------------
+
+interface SharedProps {
+  stages: Stage[]
+  openNotes: string | null
+  setOpenNotes: (id: string | null) => void
+  onOpenHistory: (lead: Lead) => void
+  onMove: (lead: Lead, stageId: string) => void
+}
+
+function Avatar({ row, openNotes, setOpenNotes }: { row: LeadRow } & Pick<SharedProps, 'openNotes' | 'setOpenNotes'>) {
+  const { lead, notes } = row
+  const open = openNotes === lead.id
+  return (
+    <div className="avatar-wrap">
+      <span className="initials" aria-hidden="true">{initials(lead.name)}</span>
+      {notes.length > 0 && (
+        <button
+          type="button"
+          className="ai-badge"
+          aria-label={`${notes.length} ${notes.length === 1 ? 'notificação' : 'notificações'} da assistente sobre ${firstName(lead.name)}`}
+          aria-expanded={open}
+          onClick={() => setOpenNotes(open ? null : lead.id)}
+        >
+          {notes.length}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function StageSelect({ lead, stages, onMove, compact }: { lead: Lead; stages: Stage[]; onMove: (lead: Lead, stageId: string) => void; compact?: boolean }) {
+  const current = stages.find((s) => s.id === lead.stageId)
+  return (
+    <label className={`stage-select ${current?.kind ?? 'open'}${compact ? ' compact' : ''}`}>
+      <span className="sr-only">Mover {lead.name} para outra etapa</span>
+      <select value={lead.stageId} onChange={(e) => onMove(lead, e.target.value)}>
+        {stages.map((s) => (
+          <option key={s.id} value={s.id}>{s.name}</option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function NotesPopover({
+  row,
+  onClose,
+  onOpenHistory,
+  style,
+}: {
+  row: LeadRow
+  onClose: () => void
+  onOpenHistory: (lead: Lead) => void
+  style: CSSProperties
+}) {
+  const first = firstName(row.lead.name)
+  return (
+    <div className="popover ai" role="dialog" aria-label={`Notificações da assistente sobre ${first}`} style={style}>
+      <div className="popover-head">
+        <span className="eyebrow">Assistente IA · {first}</span>
+        <button type="button" className="close-btn" aria-label="Fechar" onClick={onClose}>
+          <IconClose size={14} />
+        </button>
+      </div>
+      <ul className="notes">
+        {row.notes.map((n, i) => (
+          <li key={i}>
+            <span className={`dot${n.kind === 'late' ? ' risk' : n.kind === 'today' || n.kind === 'stale' ? ' warn' : ''}`} />
+            <span>{n.text}</span>
+          </li>
+        ))}
+      </ul>
+      <div className="actions">
+        {row.insight?.actionLabel && (
+          <button type="button" className="btn ai" disabled title="Ações automáticas chegam na próxima versão">
+            {row.insight.actionLabel}
           </button>
         )}
-        {canAdd && adding && <AddLeadForm onCancel={() => setAdding(false)} onSave={async (input) => { await onAddLead(input); setAdding(false) }} />}
+        <button
+          type="button"
+          className="btn ghost ai"
+          onClick={() => {
+            onClose()
+            onOpenHistory(row.lead)
+          }}
+        >
+          Ver histórico
+        </button>
       </div>
-    </section>
+    </div>
+  )
+}
+
+function FilterSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: [string, string][] }) {
+  return (
+    <label className="field">
+      {label}
+      <select className="select" value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">Todos</option>
+        {options.map(([v, text]) => (
+          <option key={v} value={v}>{text}</option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+// ---- Kanban -------------------------------------------------------------------------
+
+function Kanban({ rows, selected, stages, openNotes, setOpenNotes, onOpenHistory, onMove }: { rows: LeadRow[]; selected: string | 'all' } & SharedProps) {
+  const [dragging, setDragging] = useState<string | null>(null)
+  const [over, setOver] = useState<string | null>(null)
+  const colRefs = useRef<Record<string, HTMLDivElement | null>>({})
+
+  useEffect(() => {
+    if (selected !== 'all') colRefs.current[selected]?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' })
+  }, [selected])
+
+  function drop(e: DragEvent, stageId: string) {
+    e.preventDefault()
+    const id = e.dataTransfer.getData('text/plain')
+    setOver(null)
+    setDragging(null)
+    const row = rows.find((r) => r.lead.id === id)
+    if (row) onMove(row.lead, stageId)
+  }
+
+  return (
+    <div className="kanban" role="list" aria-label="Kanban por etapa">
+      {stages.map((stage) => {
+        const cards = rows.filter((r) => r.lead.stageId === stage.id)
+        return (
+          <div
+            key={stage.id}
+            ref={(el) => {
+              colRefs.current[stage.id] = el
+            }}
+            role="listitem"
+            className={`kcol ${stage.kind}${selected === stage.id ? ' focus' : ''}${over === stage.id ? ' over' : ''}`}
+            onDragOver={(e) => {
+              if (!dragging) return
+              e.preventDefault()
+              setOver(stage.id)
+            }}
+            onDragLeave={() => setOver((o) => (o === stage.id ? null : o))}
+            onDrop={(e) => drop(e, stage.id)}
+          >
+            <div className="kcol-head">
+              <span>{stage.name}</span>
+              <span className="count-pill neutral">{cards.length}</span>
+            </div>
+            {cards.length === 0 && <div className="kempty">Arraste um lead para cá</div>}
+            {cards.map((row) => {
+              const { lead, task, closed } = row
+              const days = daysSince(lead.stageChangedAt)
+              const due = task ? dueLabel(task.dueDate) : null
+              return (
+                <article
+                  key={lead.id}
+                  className={`kcard${dragging === lead.id ? ' dragging' : ''}`}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData('text/plain', lead.id)
+                    e.dataTransfer.effectAllowed = 'move'
+                    setDragging(lead.id)
+                  }}
+                  onDragEnd={() => {
+                    setDragging(null)
+                    setOver(null)
+                  }}
+                >
+                  <div className="kcard-top">
+                    <Avatar row={row} openNotes={openNotes} setOpenNotes={setOpenNotes} />
+                    <div className="cell-stack" style={{ flexGrow: 1 }}>
+                      <span className="person-name" style={{ fontSize: 13 }}>{lead.name}</span>
+                      <span className="sub">{lead.source ?? '—'}</span>
+                    </div>
+                    <button type="button" className="icon-btn sm" style={{ width: 30, height: 30 }} aria-label={`Histórico de ${firstName(lead.name)}`} title="Histórico" onClick={() => onOpenHistory(lead)}>
+                      <IconHistory size={15} />
+                    </button>
+                  </div>
+                  <div className="kcard-meta">
+                    {lead.fit && <span className={`tag ${lead.fit}`}>{FIT_LABEL[lead.fit]}</span>}
+                    <span className="sub">{lead.planName ?? ''}</span>
+                    <span className={`days${!closed && days >= 5 ? ' stale' : ''}`} style={{ marginLeft: 'auto' }}>{daysLabel(days)}</span>
+                  </div>
+                  {task && due && (
+                    <div className="kcard-task">
+                      <span>{task.title}</span>
+                      <span className={`due ${due.tone}`}>{due.text}</span>
+                    </div>
+                  )}
+                  <StageSelect lead={lead} stages={stages} onMove={onMove} compact />
+                  {openNotes === lead.id && (
+                    <NotesPopover row={row} onClose={() => setOpenNotes(null)} onOpenHistory={onOpenHistory} style={{ top: 48, left: 8, width: 320 }} />
+                  )}
+                </article>
+              )
+            })}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ---- Dialogs & forms ------------------------------------------------------------------
+
+function LostDialog({ name, onCancel, onConfirm }: { name: string; onCancel: () => void; onConfirm: (reason: string | null) => Promise<void> }) {
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => ref.current?.focus(), [])
+
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await onConfirm(reason.trim() || null)
+    } catch (err) {
+      setError((err as Error).message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <button type="button" className="scrim" aria-label="Cancelar" onClick={onCancel} />
+      <form className="dialog" role="dialog" aria-modal="true" aria-label={`Marcar ${name} como perdido`} onSubmit={submit}>
+        <div className="popover-head">
+          <span className="eyebrow">Marcar {name} como perdido</span>
+          <button type="button" className="close-btn" aria-label="Cancelar" onClick={onCancel}>
+            <IconClose size={14} />
+          </button>
+        </div>
+        <label className="field">
+          Motivo da perda
+          <input ref={ref} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Ex.: Achou caro, mora longe…" />
+        </label>
+        {error && <span className="form-error" role="alert">{error}</span>}
+        <div className="actions">
+          <button type="submit" className="btn danger" disabled={busy}>{busy ? 'Salvando…' : 'Marcar como perdido'}</button>
+          <button type="button" className="btn ghost" onClick={onCancel}>Cancelar</button>
+        </div>
+      </form>
+    </>
   )
 }
 
