@@ -7,7 +7,7 @@ export type Selection = string | 'all'
 // Funnel silhouette: each open stage narrows from left to right.
 const HEIGHT = 128
 const EDGES = [128, 116, 104, 92, 80, 68]
-const TINTS = ['#EFEDFC', '#E6E3FA', '#DCD8F8', '#D1CCF5', '#C8C2F2']
+const TINTS = ['#EAF1FD', '#DDE8FB', '#CFDFF9', '#C1D5F7', '#B3CBF4']
 const GOAL = { tint: '#FCEFC7', ink: '#6B4700', active: '#E9B949', activeInk: '#3A2600' }
 
 function stageValue(leads: Lead[]): string {
@@ -26,8 +26,8 @@ function segmentStyle(index: number, active: boolean, isGoal: boolean): CSSPrope
   const t1 = ((HEIGHT - hl) / 2 / HEIGHT) * 100
   const t2 = ((HEIGHT - hr) / 2 / HEIGHT) * 100
   const clip = `polygon(0% ${t1}%, 100% ${t2}%, 100% ${100 - t2}%, 0% ${100 - t1}%)`
-  const bg = isGoal ? (active ? GOAL.active : GOAL.tint) : active ? '#5B4BDB' : TINTS[index] ?? TINTS[TINTS.length - 1]
-  const color = isGoal ? (active ? GOAL.activeInk : GOAL.ink) : active ? '#FFFFFF' : '#2F2396'
+  const bg = isGoal ? (active ? GOAL.active : GOAL.tint) : active ? '#2E62C9' : TINTS[index] ?? TINTS[TINTS.length - 1]
+  const color = isGoal ? (active ? GOAL.activeInk : GOAL.ink) : active ? '#FFFFFF' : '#1D3F8A'
   return { clipPath: clip, background: bg, color }
 }
 

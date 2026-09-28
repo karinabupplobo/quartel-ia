@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FunnelData, Lead, Workspace } from '../lib/data'
 import { addLead, addTask, loadFunnel } from '../lib/data'
-import { daysSince, initials } from '../lib/format'
+import { daysLabel, daysSince, dueLabel, initials } from '../lib/format'
 import { Assistant } from '../components/Assistant'
 import { HistoryDrawer } from '../components/HistoryDrawer'
 import { IconImage, IconSearch } from '../components/icons'
 import { LeadTable } from '../components/LeadTable'
-import type { TableRow } from '../components/LeadTable'
+import type { Note, TableRow } from '../components/LeadTable'
 import { Pipeline } from '../components/Pipeline'
 import type { Selection } from '../components/Pipeline'
 import { Sidebar } from '../components/Sidebar'
@@ -51,13 +51,20 @@ export function FunnelPage({ workspace, onSignOut }: { workspace: Workspace; onS
     .sort((a, b) => b.priority - a.priority)
     .map((lead) => {
       const stage = stageById.get(lead.stageId)
-      return {
-        lead,
-        stageName: stage?.name ?? '',
-        closed: stage?.kind !== 'open',
-        task: nextTask(lead.id),
-        insight: leadInsight(lead.id),
+      const closed = stage?.kind !== 'open'
+      const task = nextTask(lead.id)
+      const insight = leadInsight(lead.id)
+      // The assistant's notifications for this lead: its comment, plus task and stall alerts.
+      const notes: Note[] = []
+      if (insight) notes.push({ kind: 'ai', text: insight.body })
+      if (task) {
+        const due = dueLabel(task.dueDate)
+        if (due.tone === 'late') notes.push({ kind: 'late', text: `Tarefa atrasada: ${task.title}.` })
+        if (due.tone === 'today') notes.push({ kind: 'today', text: `Tarefa para hoje: ${task.title}.` })
       }
+      const days = daysSince(lead.stageChangedAt)
+      if (!closed && days >= 5) notes.push({ kind: 'stale', text: `Parado há ${daysLabel(days)} em ${stage?.name ?? 'esta etapa'}.` })
+      return { lead, stageName: stage?.name ?? '', closed, task, insight, notes }
     })
 
   const selectedStage = selected === 'all' ? null : stageById.get(selected)

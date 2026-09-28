@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { Fit, Insight, Lead, Task } from '../lib/data'
 import { daysLabel, daysSince, dueLabel, firstName, initials, phone, planPrice } from '../lib/format'
-import { AssistantAvatar, IconClose, IconDownload, IconHistory, IconPlus } from './icons'
+import { IconClose, IconDownload, IconHistory, IconPlus } from './icons'
 
 const FIT_LABEL: Record<Fit, string> = { high: 'Alto', medium: 'Médio', low: 'Baixo' }
 const FIT_OPTIONS: { id: Fit | 'all'; label: string }[] = [
@@ -12,12 +12,19 @@ const FIT_OPTIONS: { id: Fit | 'all'; label: string }[] = [
   { id: 'low', label: 'Baixo' },
 ]
 
+/** Something the assistant flags about a lead (shown as the purple counter). */
+export interface Note {
+  kind: 'ai' | 'late' | 'today' | 'stale'
+  text: string
+}
+
 export interface TableRow {
   lead: Lead
   stageName: string
   closed: boolean
   task: Task | undefined
   insight: Insight | undefined
+  notes: Note[]
 }
 
 export function LeadTable({
@@ -130,7 +137,7 @@ export function LeadTable({
 
         {visible.length === 0 && <div className="empty">Nenhum lead aqui com esses filtros.</div>}
 
-        {visible.map(({ lead, stageName, closed, task, insight }) => {
+        {visible.map(({ lead, stageName, closed, task, insight, notes }) => {
           const days = daysSince(lead.stageChangedAt)
           const stale = !closed && days >= 5
           const due = task ? dueLabel(task.dueDate) : null
@@ -141,18 +148,18 @@ export function LeadTable({
               <div role="cell" className="person">
                 <div className="avatar-wrap">
                   <span className="initials" aria-hidden="true">{initials(lead.name)}</span>
-                  {insight && (
+                  {notes.length > 0 && (
                     <button
                       type="button"
                       className="ai-badge"
-                      aria-label={`Comentário da assistente sobre ${first}`}
+                      aria-label={`${notes.length} ${notes.length === 1 ? 'notificação' : 'notificações'} da assistente sobre ${first}`}
                       aria-expanded={insightOpen}
                       onClick={() => {
                         setTaskFor(null)
                         setOpenInsight(insightOpen ? null : lead.id)
                       }}
                     >
-                      <AssistantAvatar size={20} />
+                      {notes.length}
                     </button>
                   )}
                 </div>
@@ -206,24 +213,31 @@ export function LeadTable({
                 </button>
               </div>
 
-              {insightOpen && insight && (
-                <div className="popover" role="dialog" aria-label={`Assistente IA sobre ${first}`} style={{ top: 56, left: 20 }}>
+              {insightOpen && notes.length > 0 && (
+                <div className="popover ai" role="dialog" aria-label={`Notificações da assistente sobre ${first}`} style={{ top: 56, left: 20 }}>
                   <div className="popover-head">
                     <span className="eyebrow">Assistente IA · {first}</span>
                     <button type="button" className="close-btn" aria-label="Fechar" onClick={() => setOpenInsight(null)}>
                       <IconClose size={14} />
                     </button>
                   </div>
-                  <p>{insight.body}</p>
+                  <ul className="notes">
+                    {notes.map((n, i) => (
+                      <li key={i}>
+                        <span className={`dot${n.kind === 'late' ? ' risk' : n.kind === 'today' || n.kind === 'stale' ? ' warn' : ''}`} />
+                        <span>{n.text}</span>
+                      </li>
+                    ))}
+                  </ul>
                   <div className="actions">
-                    {insight.actionLabel && (
-                      <button type="button" className="btn" disabled title="Ações automáticas chegam na próxima versão">
+                    {insight?.actionLabel && (
+                      <button type="button" className="btn ai" disabled title="Ações automáticas chegam na próxima versão">
                         {insight.actionLabel}
                       </button>
                     )}
                     <button
                       type="button"
-                      className="btn ghost"
+                      className="btn ghost ai"
                       onClick={() => {
                         setOpenInsight(null)
                         onOpenHistory(lead)
