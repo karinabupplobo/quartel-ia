@@ -1,5 +1,6 @@
 -- =============================================================================
--- Membership demo seed: "Clube Aurora" (fictional). Demo only.
+-- Membership demo seed: "Clube Aurora" (fictional). Shipped as a migration
+-- because the quartel-ia project exists only to host demos.
 -- Dates are relative to current_date so the demo always looks current.
 -- Deterministic UUIDs (prefix f*) so screens and tests can reference rows.
 -- Login accounts (auth.users + m_user_roles) are created separately via the

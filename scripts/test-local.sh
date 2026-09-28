@@ -22,6 +22,5 @@ for f in "$ROOT"/supabase/migrations/*.sql; do
   "${PSQL[@]}" -f "$f"
 done
 "${PSQL[@]}" -f "$ROOT/supabase/seed.sql"
-"${PSQL[@]}" -f "$ROOT/supabase/seed_membership.sql"
 "${PSQL[@]}" -o /dev/null -f "$ROOT/tests/core_rls.sql"
 "${PSQL[@]}" -o /dev/null -f "$ROOT/tests/membership_rls.sql"
