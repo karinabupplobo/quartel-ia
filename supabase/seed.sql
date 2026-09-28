@@ -1,18 +1,18 @@
 -- =============================================================================
 -- Demo seed: fictional school. Local/demo only — never runs in production.
 -- Deterministic UUIDs so every module's seed can reference the same people.
--- Login accounts (auth.users + user_roles) are created by a separate script
+-- Login accounts (auth.users + e_user_roles) are created by a separate script
 -- through the Admin API, not here.
 -- =============================================================================
 
-insert into public.tenants (id, name, slug) values
+insert into public.e_tenants (id, name, slug) values
   ('10000000-0000-4000-8000-000000000001', 'Escola Horizonte de Idiomas', 'horizonte');
 
-insert into public.tenant_modules (tenant_id, module)
+insert into public.e_tenant_modules (tenant_id, module)
 select '10000000-0000-4000-8000-000000000001', m
-from unnest(enum_range(null::public.module_key)) as m;
+from unnest(enum_range(null::public.e_module_key)) as m;
 
-insert into public.courses (id, tenant_id, name, description) values
+insert into public.e_courses (id, tenant_id, name, description) values
   ('30000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001',
    'General English', 'Adult English, levels A1 to C1'),
   ('30000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000001',
@@ -21,7 +21,7 @@ insert into public.courses (id, tenant_id, name, description) values
    'Spanish', 'Adult Spanish, levels A1 to B2');
 
 -- Fictional people. Phones use the +55 11 90000-xxxx range.
-insert into public.people (id, tenant_id, full_name, email, phone_e164, birth_date) values
+insert into public.e_people (id, tenant_id, full_name, email, phone_e164, birth_date) values
   -- management
   ('20000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001',
    'Ana Ribeiro', 'ana.ribeiro@example.com', '+5511900000001', '1984-03-12'),
@@ -46,7 +46,7 @@ insert into public.people (id, tenant_id, full_name, email, phone_e164, birth_da
   ('20000000-0000-4000-8000-000000000021', '10000000-0000-4000-8000-000000000001',
    'Maria Albuquerque', 'maria.albuquerque@example.com', '+5511900000021', '1980-08-14');
 
-insert into public.guardianships (tenant_id, guardian_person_id, student_person_id) values
+insert into public.e_guardianships (tenant_id, guardian_person_id, student_person_id) values
   ('10000000-0000-4000-8000-000000000001',
    '20000000-0000-4000-8000-000000000021',
    '20000000-0000-4000-8000-000000000015');

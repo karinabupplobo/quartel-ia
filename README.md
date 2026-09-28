@@ -7,18 +7,23 @@ own; together they form a complete system with a WhatsApp agent acting across al
 > Status: **Core module done** (schema, RLS, tests). Other modules in progress.
 > All data in this repository is fictional.
 
+## Naming
+
+The quartel-ia Supabase project hosts two demos side by side. Every database object is
+prefixed by demo: `e_` for educational (this repo) and `m_` for membership.
+
 ## Architecture
 
 - **Multi-tenant Postgres (Supabase).** Every table carries `tenant_id`; isolation is
   enforced by Row Level Security, not by the application.
-- **Modules gated in the database.** `tenant_modules` records what each school bought.
-  Every non-core table's policy calls `app.module_enabled(tenant_id, '<module>')`, so a
+- **Modules gated in the database.** `e_tenant_modules` records what each school bought.
+  Every non-core table's policy calls `app.e_module_enabled(tenant_id, '<module>')`, so a
   school without a module gets no rows even if the UI or the agent asks for them.
-- **One person, many roles.** `people` exists independently of logins: a lead, a payer,
-  a guardian and a student are the same record in different roles. Login (`user_roles`)
+- **One person, many roles.** `e_people` exists independently of logins: a lead, a payer,
+  a guardian and a student are the same record in different roles. Login (`e_user_roles`)
   is optional and only for portal users.
 - **Cross-tenant references are impossible by construction.** Composite foreign keys
-  `(tenant_id, person_id) → people(tenant_id, id)` guarantee a guardianship, role or
+  `(tenant_id, person_id) → e_people(tenant_id, id)` guarantee a guardianship, role or
   future enrollment can never point to a person from another school — even from
   service-role code that bypasses RLS.
 
@@ -28,12 +33,12 @@ See [docs/module-map.md](docs/module-map.md) for modules, dependencies and packa
 
 | Table | Purpose |
 |---|---|
-| `tenants` | schools |
-| `tenant_modules` | purchased modules (written only by quartel.ia via service role) |
-| `people` | every human the school deals with; unique phone per school (agent lookup) |
-| `user_roles` | login ↔ person ↔ role (`admin`, `staff`, `teacher`, `student`, `guardian`) |
-| `guardianships` | guardian ↔ student |
-| `courses` | catalog shared by Capture, Finance and Academic |
+| `e_tenants` | schools |
+| `e_tenant_modules` | purchased modules (written only by quartel.ia via service role) |
+| `e_people` | every human the school deals with; unique phone per school (agent lookup) |
+| `e_user_roles` | login ↔ person ↔ role (`admin`, `staff`, `teacher`, `student`, `guardian`) |
+| `e_guardianships` | guardian ↔ student |
+| `e_courses` | catalog shared by Capture, Finance and Academic |
 
 ### Access rules
 
@@ -48,8 +53,8 @@ See [docs/module-map.md](docs/module-map.md) for modules, dependencies and packa
 
 ### Design decisions & trade-offs
 
-- **Helpers are `security definer` in a private `app` schema.** Policies on `user_roles`
-  need to read `user_roles`; running the lookup as the function owner avoids infinite
+- **Helpers are `security definer` in a private `app` schema.** Policies on `e_user_roles`
+  need to read `e_user_roles`; running the lookup as the function owner avoids infinite
   RLS recursion. `set search_path = ''` prevents a caller from shadowing tables. The
   `app` schema is not exposed through the Data API.
 - **Only admins grant roles.** Staff can manage people but cannot escalate themselves.
